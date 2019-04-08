@@ -16,6 +16,8 @@ import sys
 # CV Canny properties
 THRESHOLD = 100
 
+PADDING_FACTOR = 1.2
+
 class Processor:
     def __init__(self, root_path, out_path_full, out_path_roi, roi_name, target_width, crop_width):
         self.root_path = root_path
@@ -113,6 +115,86 @@ class Processor:
         
         new_file_path = patient_id + '\\' + split[0] + '\\'
         return new_file_path
+
+    def convert_rect_coords_to_square(self, x, y, x_width, y_height, img_width, img_height):
+        roi_width = x_width - x
+        roi_height = y_height - y
+        
+        roi_center_x = x + (roi_width / 2)
+        roi_center_y = y + (roi_height / 2)
+
+        # Change to square
+        roi_half = 0
+        if roi_width > roi_height:
+            roi_half = roi_width / 2
+        else:
+            roi_half = roi_height / 2
+
+        # Compute padding
+        roi_half = roi_half * PADDING_FACTOR
+
+        roi_new_x = roi_center_x - roi_half
+        roi_new_x_width = roi_center_x + roi_half
+        roi_new_y = roi_center_y - roi_half
+        roi_new_y_height = roi_center_y + roi_half
+
+        # Corection so it does not go out of bounds
+        remain_left = 0 if roi_new_x >= 0 else -roi_new_x
+        remain_right = 0 if roi_new_x_width <= img_width else roi_new_x_width - img_width
+        remain_top = 0 if roi_new_y >= 0 else -roi_new_y
+        remain_bottom = 0 if roi_new_y_height <= img_height else roi_new_y_height - img_height
+
+        roi_new_x = 0 if remain_left > 0 else roi_new_x - remain_right
+        roi_new_x_width = img_width if remain_right > 0 else roi_new_x_width + remain_right
+        roi_new_y = 0 if remain_top > 0 else roi_new_y - remain_bottom
+        roi_new_y_height = img_height if remain_bottom > 0 else roi_new_y_height + remain_top
+
+        return roi_new_x, roi_new_y, roi_new_x_width, roi_new_y_height
+
+    def process_v2(self):
+        print('Begin processing')
+        file_filter = '**/*.dcm'
+        full_to_process = ''
+        rect_coords = self.retrieve_rect_coords
+        dicom_reader = pydicom.read_file
+
+        for filename in glob.iglob(self.root_path + '\\' + file_filter, recursive=True):
+            if 'full' in filename:
+                full_to_process = filename
+                continue
+            
+            if self.roi_name not in filename:
+                continue
+
+            roi_ds = dicom_reader(filename)
+            roi_arr = roi_ds.pixel_array
+            height, width = roi_arr.shape
+            temp_x, temp_x_width, temp_y, temp_y_height = rect_coords(roi_arr)
+            
+            new_file_path = self.format_output_path(filename)
+            new_file_path = self.out_path_full + '\\' + new_file_path
+
+            x, y, x_width, y_height = self.convert_rect_coords_to_square(temp_x, temp_y, temp_x_width, temp_y_height, width, height)
+
+            #print([x, y, x_width, y_height, scale])
+            #print([int(x_width - x), int(y_height - y)])
+            full_ds = dicom_reader(full_to_process)
+            full_arr = full_ds.pixel_array
+
+            if not os.path.exists(new_file_path):
+                os.makedirs(new_file_path)
+
+            roi_img = roi_arr[int(y):int(y_height), int(x):int(x_width)]
+            roi_img = cv2.resize(roi_img, (int(self.crop_width), int(self.crop_width)))
+            roi_file_path = new_file_path + 'roi.png'
+            cv2.imwrite(roi_file_path, roi_img)
+
+            full_img = full_arr[int(y):int(y_height), int(x):int(x_width)]
+            full_img = cv2.resize(full_img, (int(self.crop_width), int(self.crop_width)))
+            full_file_path = new_file_path + 'full.png'
+            cv2.imwrite(full_file_path, full_img)
+            #self.write_img('full.png', new_file_path, scaled_full_arr, temp_x, temp_y, temp_x_width, temp_y_height)
+            #self.write_img('roi.png', new_file_path, scaled_roi_arr, temp_x, temp_y, temp_x_width, temp_y_height)
 
     def process(self):
         print('Begin processing')
@@ -241,4 +323,4 @@ if __name__ == '__main__':
         p = Processor(sys.argv[1], sys.argv[2], sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6])
         #p.compute_bounding_box()
         #print(p.format_output_path('CBIS-DDSM-Mass-Train\\Mass-Training_P_00001_LEFT_CC\\07-20-2016-DDSM-74994\\1-full mammogram images-24515'))
-        p.process()    
+        p.process_v2()
